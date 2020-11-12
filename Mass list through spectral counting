@@ -1,0 +1,161 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May 16 15:43:37 2019
+
+@author: mxg635
+"""
+import comtypes, comtypes.client
+#from ctypes import *
+from comtypes.automation import *
+import sys
+#import numpy
+import math
+import tkinter as tk
+from tkinter import filedialog
+
+
+root = tk.Tk()
+root.withdraw()
+
+
+def GetMSOrderForScanNum(xr, scanNumber):
+        """This function returns the MS order for the scan specified by scanNumber from the scan
+        event structure in the raw file.
+        The value returned in the pnScanType variable is one of the following:
+        Neutral gain -3
+        Neutral loss -2
+        Parent scan -1
+        Any scan order 0
+        MS  1
+        MS2  2
+        MS3  3
+        MS4  4
+        MS5  5
+        MS6  6
+        MS7  7
+        MS8  8
+        MS9  9
+        """
+        MSOrder = c_long()
+        error = xr.GetMSOrderForScanNum(c_long(scanNumber),byref(MSOrder))
+        if error : raise IOError( "scan {} : GetMSOrderForScanNum error : {}".format(scanNumber,error) )
+        return MSOrder.value
+
+
+
+def GetMassListFromScanNum(xr, scanNumber,
+                                    filter="",
+                                    intensityCutoffType = 1,
+                                    intensityCutoffValue = 20000,
+                                    maxNumberOfPeaks = 0,
+                                    centroidResult = False,
+                                    centroidPeakWidth = 0.0):
+        """This function is only applicable to scanning devices such as MS and PDA.
+
+        If no scan filter is supplied, the scan corresponding to pnScanNumber is returned. If a scan
+        filter is provided, the closest matching scan to pnScanNumber that matches the scan filter is
+        returned.
+        Scan filters must match the Xcalibur scan filter format (e.g. "FTMS + c NSI Full ms [300.00-1800.00]").
+
+        To reduce the number of low intensity data peaks returned, an intensity cutoff,
+        nIntensityCutoffType, may be applied. The available types of cutoff are
+        0   None (all values returned)
+        1   Absolute (in intensity units)
+        2   Relative (to base peak)
+
+        To limit the total number of data peaks that are returned in the mass list, set
+        nMaxNumberOfPeaks to a value greater than zero. To have all data peaks returned, set
+        nMaxNumberOfPeaks to zero.
+
+        To have profile scans centroided, set bCentroidResult to TRUE. This parameter is ignored for
+        centroid scans.
+
+        The pvarPeakFlags variable is currently not used. This variable is reserved for future use to
+        return flag information, such as saturation, about each mass intensity pair.
+        """
+        peakList = comtypes.automation.VARIANT()
+        peakFlags = comtypes.automation.VARIANT()
+        pnArraySize = c_long()
+        error = xr.GetMassListFromScanNum(c_long(scanNumber), filter, intensityCutoffType,
+            intensityCutoffValue, maxNumberOfPeaks, centroidResult, c_double(centroidPeakWidth), peakList, peakFlags, byref(pnArraySize))
+        if error : raise IOError ("GetMassListFromScanNum error : ",error)
+        return peakList.value#, peakFlags.value
+    
+file_path = filedialog.askopenfilename(title = "Pick the .RAW file to parse")
+dir_path = filedialog.askdirectory(title = "Pick file directory for savefile")
+
+xr = comtypes.client.CreateObject('MSFileReader.XRawfile')
+xr.open(file_path)
+res = xr.SetCurrentController(0,1)#Needed for some reason.
+
+
+
+#Create bins - list of lists
+max_value = 800
+min_value = 100
+bin_width = 0.01
+ms2hist = []
+num_of_bins = math.ceil((max_value - min_value) / bin_width)
+
+
+
+
+
+binname = min_value
+for i in range(num_of_bins):
+    ms2hist.append([0,binname])
+    binname = round(binname +bin_width,2)
+
+ms1_max = 1500
+ms1_min = 300
+ms1_width = 0.1
+ms1hist = []
+
+num_of_ms1bins = math.ceil((ms1_max - ms1_min) / ms1_width)
+
+ms1binname = min_value
+for i in range(num_of_ms1bins):
+    ms1hist.append([0,ms1binname])
+    ms1binname = round(ms1binname +bin_width,2)
+
+
+    
+ns = c_long()
+xr.GetNumSpectra(ns)
+
+#Divide into MS1 and MS2
+x=0
+y=0
+for i in range (1,ns.value):
+    if GetMSOrderForScanNum(xr,i) == 2:
+        for value in GetMassListFromScanNum(xr,i)[0]:
+            if value != 0.0 and (max_value > value > min_value):
+                bin_num = math.floor(((value*10 - min_value*10)/10) / bin_width)  
+                #print(bin_num)
+                ms2hist[bin_num][0] += 1
+        
+        
+    elif GetMSOrderForScanNum(xr,i) == 1:
+        for mass in GetMassListFromScanNum(xr,i)[0]:
+            if mass != 0.0 and (ms1_max > mass > ms1_min):
+                ms1bin_num = math.floor(((mass*10 - ms1_min*10)/10) / ms1_width)  
+                #print(ms1bin_num)
+                ms1hist[ms1bin_num][0] += 1
+      
+print(ms2hist)        
+print(ns.value)
+print(x)
+print(y)
+
+outfile = open(dir_path+'/SCX1.txt','w')
+for entry in ms2hist:
+    outfile.write(str(entry[0])+'\t'+ str(entry[1])+'\n')
+
+outfile.close()
+
+
+outfile2 = open(dir_path+'/SCX1ms1.txt','w')
+for ms1entry in ms1hist:
+    outfile2.write(str(ms1entry[0])+'\t'+ str(ms1entry[1])+'\n')
+
+outfile2.close()
